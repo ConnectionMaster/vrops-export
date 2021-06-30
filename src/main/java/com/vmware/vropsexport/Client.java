@@ -1,14 +1,14 @@
-/* 
- * Copyright 2017 VMware, Inc. All Rights Reserved.
+/*
+ * Copyright 2017-2021 VMware, Inc. All Rights Reserved.
  *
  * SPDX-License-Identifier:	Apache-2.0
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,6 +17,13 @@
  */
 package com.vmware.vropsexport;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vmware.vropsexport.exceptions.ExporterException;
+import com.vmware.vropsexport.models.AuthRequest;
+import com.vmware.vropsexport.models.AuthResponse;
+import com.vmware.vropsexport.security.ExtendableTrustStrategy;
+import com.vmware.vropsexport.security.RecoverableCertificateException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
@@ -26,14 +33,9 @@ import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
 import java.util.List;
-
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
-
-import com.vmware.vropsexport.security.ExtendableTrustStrategy;
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.http.HttpException;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
@@ -49,151 +51,199 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.ssl.SSLContexts;
-import org.apache.http.util.EntityUtils;
-import org.json.JSONObject;
-
-import com.vmware.vropsexport.security.RecoverableCertificateException;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 @SuppressWarnings("WeakerAccess")
 public class Client {
-	private static final Log log = LogFactory.getLog(Client.class);
+  private static final Logger log = LogManager.getLogger(Client.class);
 
-	private static final int CONNTECTION_TIMEOUT_MS = 60000;
+  private static final int CONNTECTION_TIMEOUT_MS = 60000;
 
-	private static final int CONNECTION_REQUEST_TIMEOUT_MS = 60000;
+  private static final int CONNECTION_REQUEST_TIMEOUT_MS = 60000;
 
-	private static final int SOCKET_TIMEOUT_MS = 300000;
+  private static final int SOCKET_TIMEOUT_MS = 300000;
 
-	private final HttpClient client;
+  private final HttpClient client;
 
-	private final String urlBase;
+  private final String urlBase;
 
-	private String authToken;
+  private final String authToken;
 
-	public Client(String urlBase, String username, String password, KeyStore extendedTrust) throws KeyManagementException, NoSuchAlgorithmException, KeyStoreException, IOException, HttpException, ExporterException {
-		this.urlBase = urlBase;
-		// Configure timeout
-		//
-		final RequestConfig requestConfig = RequestConfig.custom()
-				.setConnectTimeout(CONNTECTION_TIMEOUT_MS)
-				.setConnectionRequestTimeout(CONNECTION_REQUEST_TIMEOUT_MS)
-				.setSocketTimeout(SOCKET_TIMEOUT_MS)
-				.build();
-		
-		ExtendableTrustStrategy extendedTrustStrategy = new ExtendableTrustStrategy(extendedTrust);
-		SSLContext sslContext = SSLContexts.custom().loadTrustMaterial(null, extendedTrustStrategy).build();
-		SSLConnectionSocketFactory sslf = new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE);
-		Registry<ConnectionSocketFactory> socketFactoryRegistry = RegistryBuilder.<ConnectionSocketFactory> create().register("https", sslf).build();
-		PoolingHttpClientConnectionManager cm = new PoolingHttpClientConnectionManager(socketFactoryRegistry);
-		cm.setMaxTotal(20);
-		cm.setDefaultMaxPerRoute(20);
-		this.client = HttpClients.custom().
-				setSSLSocketFactory(sslf).
-				setConnectionManager(cm).
-				setDefaultRequestConfig(requestConfig).
-				//setRetryHandler(new DefaultHttpRequestRetryHandler(3, false)).
-				setSSLHostnameVerifier(NoopHostnameVerifier.INSTANCE).build();
+  private final boolean dumpRest;
 
-		// Authenticate
-		//
-		try {
-			JSONObject rq = new JSONObject();
+  public Client(
+      final String urlBase,
+      String username,
+      final String password,
+      final KeyStore extendedTrust,
+      final boolean dumpRest)
+      throws KeyManagementException, NoSuchAlgorithmException, KeyStoreException, IOException,
+          HttpException, ExporterException {
+    this.urlBase = urlBase;
+    this.dumpRest = dumpRest;
+    // Configure timeout
+    //
+    final RequestConfig requestConfig =
+        RequestConfig.custom()
+            .setConnectTimeout(CONNTECTION_TIMEOUT_MS)
+            .setConnectionRequestTimeout(CONNECTION_REQUEST_TIMEOUT_MS)
+            .setSocketTimeout(SOCKET_TIMEOUT_MS)
+            .build();
 
-			// User may be in a non-local auth source.
-			//
-			int p = username.indexOf('\\');
-			if(p != -1) {
-				rq.put("authSource", username.substring(0, p));
-				username = username.substring(p + 1);
-			} else {
-				p = username.indexOf('@');
-				if (p != -1) {
-					rq.put("authSource", username.substring(p + 1));
-					username = username.substring(0, p);
-				}
-			}
-			rq.put("username", username);
-			rq.put("password", password);
-			try (InputStream is = this.postJsonReturnStream("/suite-api/api/auth/token/acquire", rq)) {
-				JSONObject response = new JSONObject(IOUtils.toString(is, Charset.defaultCharset()));
-				this.authToken = response.getString("token");
-			}
-		} catch(SSLHandshakeException e) {
-			// If we captured a cert, it's recoverable by asking the user to trust it.
-			//
-			X509Certificate[] cc = extendedTrustStrategy.getCapturedCerts();
-			if(cc == null)
-				throw e;
-			throw new RecoverableCertificateException(cc, e);
-		}
-	}
+    final ExtendableTrustStrategy extendedTrustStrategy =
+        new ExtendableTrustStrategy(extendedTrust);
+    final SSLContext sslContext =
+        SSLContexts.custom().loadTrustMaterial(null, extendedTrustStrategy).build();
+    final SSLConnectionSocketFactory sslf =
+        new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE);
+    final Registry<ConnectionSocketFactory> socketFactoryRegistry =
+        RegistryBuilder.<ConnectionSocketFactory>create().register("https", sslf).build();
+    final PoolingHttpClientConnectionManager cm =
+        new PoolingHttpClientConnectionManager(socketFactoryRegistry);
+    cm.setMaxTotal(20);
+    cm.setDefaultMaxPerRoute(20);
+    client =
+        HttpClients.custom()
+            .setSSLSocketFactory(sslf)
+            .setConnectionManager(cm)
+            .setDefaultRequestConfig(requestConfig)
+            .
+            // setRetryHandler(new DefaultHttpRequestRetryHandler(3, false)).
+            setSSLHostnameVerifier(NoopHostnameVerifier.INSTANCE)
+            .build();
 
-	public JSONObject getJson(String uri, String ...queries) throws IOException, HttpException {
-		HttpResponse resp = this.innerGet(uri, queries);
-		return new JSONObject(EntityUtils.toString(resp.getEntity()));
-	}
+    // Authenticate
+    //
+    try {
+      // User may be in a non-local auth source.
+      //
+      int p = username.indexOf('\\');
+      String authSource = null;
+      if (p != -1) {
+        authSource = username.substring(0, p);
+        username = username.substring(p + 1);
+      } else {
+        p = username.indexOf('@');
+        if (p != -1) {
+          authSource = username.substring(p + 1);
+          username = username.substring(0, p);
+        }
+      }
+      final AuthRequest rq = new AuthRequest(authSource, username, password);
+      final AuthResponse response =
+          postJsonReturnJson("/suite-api/api/auth/token/acquire", rq, AuthResponse.class);
+      authToken = response.getToken();
+    } catch (final SSLHandshakeException e) {
+      // If we captured a cert, it's recoverable by asking the user to trust it.
+      //
+      final X509Certificate[] cc = extendedTrustStrategy.getCapturedCerts();
+      if (cc == null) {
+        throw e;
+      }
+      throw new RecoverableCertificateException(cc, e);
+    }
+  }
 
-	private HttpResponse innerGet(String uri, String ...queries) throws IOException, HttpException {
-		if(queries != null) {
-			for(int i = 0; i < queries.length; ++i) {
-				uri += i == 0 ? '?' : '&';
-				uri += queries[i];
-			}
-		}
-		HttpGet get = new HttpGet(urlBase + uri);
-		get.addHeader("Accept", "application/json");
-		if(this.authToken != null)
-			get.addHeader("Authorization", "vRealizeOpsToken " + this.authToken + "");
-		HttpResponse resp = client.execute(get);
-		this.checkResponse(resp);
-		return resp;
-	}
+  public <T> T getJson(final String uri, final Class<T> responseClass, final String... queries)
+      throws IOException, HttpException {
+    final HttpResponse resp = innerGet(uri, queries);
+    return getObjectMapper().readValue(resp.getEntity().getContent(), responseClass);
+  }
 
-	public InputStream postJsonReturnStream(String uri, JSONObject payload) throws IOException, HttpException {
-		HttpPost post = new HttpPost(urlBase + uri);
-		post.setEntity(new StringEntity(payload.toString()));
-		//System.err.println(payload.toString());
-		post.addHeader("Accept", "application/json");
-		post.addHeader("Content-Type", "application/json");
-		if(this.authToken != null)
-			post.addHeader("Authorization", "vRealizeOpsToken " + this.authToken + "");
-		HttpResponse resp = client.execute(post);
-		this.checkResponse(resp);
-		return resp.getEntity().getContent();
-	}
+  private HttpResponse innerGet(String uri, final String... queries)
+      throws IOException, HttpException {
+    if (queries != null) {
+      final StringBuilder sb = new StringBuilder(uri);
+      for (int i = 0; i < queries.length; ++i) {
+        sb.append(i == 0 ? '?' : '&');
+        sb.append(queries[i]);
+      }
+      uri = sb.toString();
+    }
+    if (dumpRest) {
+      log.debug("GET " + urlBase + uri);
+    }
+    final HttpGet get = new HttpGet(urlBase + uri);
+    get.addHeader("Accept", "application/json");
+    get.addHeader("Accept-Encoding", "gzip");
+    if (authToken != null) {
+      get.addHeader("Authorization", "vRealizeOpsToken " + authToken + "");
+    }
+    final HttpResponse resp = client.execute(get);
+    checkResponse(resp);
+    return resp;
+  }
 
-	public JSONObject getJson(String uri, List<String> queries) throws IOException, HttpException {
-		return this.getJson(uri, this.packQueries(queries));
-	}
+  public InputStream postJsonReturnStream(final String uri, final Object payload)
+      throws IOException, HttpException {
+    final HttpPost post = new HttpPost(urlBase + uri);
+    post.setEntity(new StringEntity(getObjectMapper().writeValueAsString(payload)));
+    post.addHeader("Accept", "application/json");
+    post.addHeader("Content-Type", "application/json");
+    post.addHeader("Accept-Encoding", "gzip");
+    if (authToken != null) {
+      post.addHeader("Authorization", "vRealizeOpsToken " + authToken + "");
+    }
+    if (dumpRest) {
+      log.debug("POST " + urlBase + uri);
+    }
+    final HttpResponse resp = client.execute(post);
+    checkResponse(resp);
+    return resp.getEntity().getContent();
+  }
 
-	public InputStream getStream(String uri, List<String> queries) throws IOException, HttpException {
-		return this.getStream(uri, this.packQueries(queries));
-	}
+  public <T> T postJsonReturnJson(
+      final String uri, final Object payload, final Class<T> responseClass)
+      throws IOException, HttpException {
+    return getObjectMapper().readValue(postJsonReturnStream(uri, payload), responseClass);
+  }
 
-	public InputStream getStream(String uri, String ...queries) throws IOException, HttpException {
-		HttpResponse resp = this.innerGet(uri, queries);
-		return resp.getEntity().getContent();
-	}
+  public <T> T getJson(final String uri, final List<String> queries, final Class<T> responseClass)
+      throws IOException, HttpException {
+    return getJson(uri, responseClass, packQueries(queries));
+  }
 
-	private String[] packQueries(List<String> queries) {
-		String[] s;
-		if(queries != null) {
-			s = new String[queries.size()];
-			queries.toArray(s);
-		} else
-			s = new String[0];
-		return s;
-	}
-	
-	private HttpResponse checkResponse(HttpResponse response)
-			throws HttpException, UnsupportedOperationException, IOException {
-		int status = response.getStatusLine().getStatusCode();
-		log.debug("HTTP status: " + status);
-		if (status == 200 || status == 201)
-			return response;
-		log.debug("Error response from server: "
-				+ IOUtils.toString(response.getEntity().getContent(), Charset.defaultCharset()));
-		throw new HttpException("HTTP Error: " + response.getStatusLine().getStatusCode() + " Reason: "
-				+ response.getStatusLine().getReasonPhrase());
-	}
+  public InputStream getStream(final String uri, final List<String> queries)
+      throws IOException, HttpException {
+    return getStream(uri, packQueries(queries));
+  }
+
+  public InputStream getStream(final String uri, final String... queries)
+      throws IOException, HttpException {
+    final HttpResponse resp = innerGet(uri, queries);
+    return resp.getEntity().getContent();
+  }
+
+  private String[] packQueries(final List<String> queries) {
+    final String[] s;
+    if (queries != null) {
+      s = new String[queries.size()];
+      queries.toArray(s);
+    } else {
+      s = new String[0];
+    }
+    return s;
+  }
+
+  private HttpResponse checkResponse(final HttpResponse response)
+      throws HttpException, UnsupportedOperationException, IOException {
+    final int status = response.getStatusLine().getStatusCode();
+    log.debug("HTTP status: " + status);
+    if (status == 200 || status == 201) {
+      return response;
+    }
+    log.debug(
+        "Error response from server: "
+            + IOUtils.toString(response.getEntity().getContent(), Charset.defaultCharset()));
+    throw new HttpException(
+        "HTTP Error: "
+            + response.getStatusLine().getStatusCode()
+            + " Reason: "
+            + response.getStatusLine().getReasonPhrase());
+  }
+
+  private ObjectMapper getObjectMapper() {
+    return new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+  }
 }

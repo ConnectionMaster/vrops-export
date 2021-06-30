@@ -1,5 +1,5 @@
-/* 
- * Copyright 2017 VMware, Inc. All Rights Reserved.
+/*
+ * Copyright 2017-2021 VMware, Inc. All Rights Reserved.
  *
  * SPDX-License-Identifier:	Apache-2.0
  *
@@ -17,17 +17,19 @@
  */
 package com.vmware.vropsexport;
 
+import com.vmware.vropsexport.exceptions.ValidationException;
 import java.io.Reader;
-
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
 
 public class ConfigLoader {
-	static public Config parse(Reader rdr) {
-		Yaml yaml = new Yaml(new Constructor(Config.class));
-		Config conf = (Config) yaml.load(rdr);
-		if(conf.getOutputFormat() == null) 
-			conf.setOutputFormat("csv");
-		return conf;
-	}
+  public static Config parse(final Reader rdr) throws ValidationException {
+    final Yaml yaml = new Yaml(new Constructor(Config.class));
+    final Config conf = (Config) yaml.load(rdr);
+    if (conf.getOutputFormat() == null) {
+      conf.setOutputFormat("csv");
+    }
+    conf.validate();
+    return conf;
+  }
 }

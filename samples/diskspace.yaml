@@ -1,4 +1,4 @@
-# Copyright 2017 VMware, Inc. All Rights Reserved.
+# Copyright 2017-2021 VMware, Inc. All Rights Reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-resourceType: VirtualMachine
+resourceType: VMWARE:VirtualMachine
 rollupType: AVG
 rollupMinutes: 1440
 dateFormat: "yyyy-MM-dd HH:mm:ss"

@@ -1,5 +1,5 @@
-/* 
- * Copyright 2017 VMware, Inc. All Rights Reserved.
+/*
+ * Copyright 2017-2021 VMware, Inc. All Rights Reserved.
  *
  * SPDX-License-Identifier:	Apache-2.0
  *
@@ -15,19 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.vmware.vropsexport;
+package com.vmware.vropsexport.models;
 
-public class ExporterException extends Exception {
+import com.fasterxml.jackson.annotation.JsonAlias;
+import java.util.List;
+import java.util.Map;
 
-	public ExporterException(String message, Throwable cause) {
-		super(message, cause);
-	}
+public class ResourceStatKeysResponse {
+  @JsonAlias({"stat-key"})
+  private List<Map<String, String>> statKeys;
 
-	public ExporterException(String message) {
-		super(message);
-	}
+  public List<Map<String, String>> getStatKeys() {
+    return statKeys;
+  }
 
-	public ExporterException(Throwable cause) {
-		super(cause);
-	}
+  public void setStatKeys(final List<Map<String, String>> statKeys) {
+    this.statKeys = statKeys;
+  }
 }
